@@ -2,6 +2,7 @@ import telebot
 from telebot import types
 import threading
 import time
+from flask import Flask
 
 # --- CONFIGURATION ---
 TOKEN = "8220394996:AAGItHrBlYABnUhkXuzl4_63VBL0dnt4SF8"
@@ -12,15 +13,25 @@ STORAGE_ID = "-1003734459413"
 LINK_1 = "https://t.me/CineRU23"
 LINK_2 = "https://t.me/+kx5UJgl1_G1iYzQ0"
 
+SITE_REDIRECT = "https://cineru.wuaze.com/index.php?i=2"
+
 bot = telebot.TeleBot(TOKEN)
+
+# --- TINY WEB SERVER FOR KOYEB ---
+def run_web():
+    app = Flask(__name__)
+
+    @app.route('/')
+    def home():
+        return "Bot is running!"
+
+    app.run(host='0.0.0.0', port=8000)
 
 # --- AUTO-DELETE FUNCTION ---
 def delete_after_delay(chat_id, message_id, delay_seconds):
-    """Wait for the delay and then delete the message."""
     time.sleep(delay_seconds)
     try:
         bot.delete_message(chat_id, message_id)
-        # Optional: Send a follow-up saying it was deleted for safety
         bot.send_message(chat_id, "⚠️ The file has been deleted for security. Use the link again if you need it.")
     except Exception as e:
         print(f"Error deleting message: {e}")
@@ -35,36 +46,47 @@ def check_membership(user_id):
         return False
 
 def send_file_and_schedule_delete(chat_id, file_msg_id):
-    """Sends the file and starts a background timer to delete it."""
     sent_msg = bot.copy_message(chat_id, STORAGE_ID, file_msg_id)
-
-    # 3 hours = 10800 seconds
-    # For testing, you can change 10800 to 10 (seconds) to see it work!
-    delay = 10800
-
-    # Start a background thread so the bot doesn't stop working
+    delay = 10800  # 3 hours
     threading.Thread(target=delete_after_delay, args=(chat_id, sent_msg.message_id, delay)).start()
 
+# --- START COMMAND ---
 @bot.message_handler(commands=['start'])
 def start_command(message):
     args = message.text.split()
-    if len(args) > 1:
-        file_msg_id = args[1]
-        if check_membership(message.from_user.id):
-            bot.send_message(message.chat.id, "✅ Verified! file is ready...")
-            send_file_and_schedule_delete(message.chat.id, file_msg_id)
-        else:
-            markup = types.InlineKeyboardMarkup()
-            btn1 = types.InlineKeyboardButton("Join Channel 1", url=LINK_1)
-            btn2 = types.InlineKeyboardButton("Join Channel 2", url=LINK_2)
-            verify_btn = types.InlineKeyboardButton("🔄 Check Membership", callback_data=f"check_{file_msg_id}")
-            markup.row(btn1, btn2)
-            markup.add(verify_btn)
-            bot.send_message(message.chat.id, "⚠️ Join both channels to get the file!", reply_markup=markup)
+
+    # If user directly opens bot without website
+    if len(args) == 1:
+        markup = types.InlineKeyboardMarkup()
+        btn = types.InlineKeyboardButton("🌐 Open Website", url=SITE_REDIRECT)
+        markup.add(btn)
+
+        bot.send_message(
+            message.chat.id,
+            "⚠️ Please visit our website first before using the bot 👇",
+            reply_markup=markup
+        )
+        return
+
+    # If user came with file ID
+    file_msg_id = args[1]
+
+    if check_membership(message.from_user.id):
+        bot.send_message(message.chat.id, "✅ Verified! File is ready...")
+        send_file_and_schedule_delete(message.chat.id, file_msg_id)
+    else:
+        markup = types.InlineKeyboardMarkup()
+        btn1 = types.InlineKeyboardButton("Join Channel 1", url=LINK_1)
+        btn2 = types.InlineKeyboardButton("Join Channel 2", url=LINK_2)
+        verify_btn = types.InlineKeyboardButton("🔄 Check Membership", callback_data=f"check_{file_msg_id}")
+        markup.row(btn1, btn2)
+        markup.add(verify_btn)
+        bot.send_message(message.chat.id, "⚠️ Join both channels to get the file!", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('check_'))
 def verify_user(call):
     file_msg_id = call.data.split("_")[1]
+
     if check_membership(call.from_user.id):
         bot.delete_message(call.message.chat.id, call.message.message_id)
         bot.send_message(call.message.chat.id, "✅ Verified! Sending file (Auto-deletes in 3 hours)...")
@@ -72,4 +94,6 @@ def verify_user(call):
     else:
         bot.answer_callback_query(call.id, "❌ Join both channels first!", show_alert=True)
 
+# --- START WEB SERVER + BOT ---
+threading.Thread(target=run_web).start()
 bot.infinity_polling()
